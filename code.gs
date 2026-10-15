@@ -222,7 +222,7 @@ function syncBirthdayEvents() {
     if (birthdayData) {
       contactsWithBirthdays++;
       try {
-        const result = updateOrCreateBirthDayEvent(person, birthdayData, calendar, allEvents, eventIndex);
+        const result = updateOrCreateBirthDayEvent(person, birthdayData, calendar, eventIndex);
         if (result === 'created') {
           processedContacts++;
           eventsCreated++;
@@ -545,7 +545,7 @@ function getAllContacts() {
  * Create or update a calendar event for a contact's birthday.
  * @returns {string} - Operation result: 'created', 'updated', 'skipped_existing', or 'skipped_invalid'
  */
-function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, eventIndex) {
+function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, eventIndex) {
   const contactName = getContactName(person);
   const contactId = person.resourceName;
 
@@ -594,7 +594,7 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
   const usingIndividualEvents = !CONFIG.useRecurrence || (CONFIG.showAgeOnRecurring && birthdayDate.year);
 
   // Find and update related events
-  const relatedEvents = findBirthdayEvents(allEvents, contactId, month, day);
+  const relatedEvents = findBirthdayEvents(eventIndex, contactId, month, day);
   const deletedSeriesIds = new Set();
   const deletedEventIds = new Set();
   let correctEventExists = false;
@@ -834,13 +834,11 @@ function getContactName(person) {
 /**
  * Check if birthday event already exists.
  */
-function findBirthdayEvents(allEvents, contactId, month, day) {
-  return [...allEvents].filter(ev => {
-    const eventContactId = tryGetTag(ev, 'contactId');
-    const d     = ev.getStartTime();
-    return ev.isAllDayEvent() &&
-           (eventContactId === contactId && (d.getMonth() === month && d.getDate() === day));
-  });
+function findBirthdayEvents(eventIndex, contactId, month, day) {
+  const prefix = `${contactId}|${month}|${day}|`;
+  return [...eventIndex]
+    .filter(([key]) => key.startsWith(prefix))
+    .map(([, event]) => event);
 }
 
 /**
