@@ -485,7 +485,8 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
   const month = parseInt(birthdayDate.month, 10) - 1;
   const day = parseInt(birthdayDate.day, 10);
 
-  const birthdayStartDate = new Date(startYear, month, day);
+  const firstBirthdayYear = birthdayDate.year ? birthdayDate.year + 1 : startYear;
+  const birthdayStartDate = new Date(Math.max(startYear, firstBirthdayYear), month, day);
   const birthdayDateThisYear = new Date(currentYear, month, day);
 
   if (isNaN(birthdayStartDate.getTime()) || isNaN(birthdayDateThisYear.getTime())) {
