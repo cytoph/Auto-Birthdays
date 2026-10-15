@@ -144,6 +144,20 @@ const LANGUAGE_CONFIG = {
  * Also manages the optional time-based trigger.
  */
 function loopThroughContacts() {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) {
+    Logger.log('Another Auto-Birthdays run is already active; skipping this run.');
+    return;
+  }
+
+  try {
+    return syncBirthdayEvents();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function syncBirthdayEvents() {
   if (CONFIG.useTrigger) {
     ensureTriggerExists();
   } else {
@@ -176,8 +190,10 @@ function loopThroughContacts() {
   const currentYear = new Date().getFullYear();
   const startDate = new Date(currentYear - CONFIG.pastYears - 1, 0, 1);
   const endDate = new Date(currentYear + CONFIG.futureYears + 1, 11, 31);
-  const allEvents = calendar.getEvents(startDate, endDate);
+  const allEvents = new Set(calendar.getEvents(startDate, endDate));
   const eventIndex  = buildBirthdayIndex(allEvents);
+
+  removeUnindexedEvents(allEvents, eventIndex);
 
   // Initialize counters for processing report
   let totalContacts = connections.length;
@@ -377,15 +393,60 @@ function generateLocalizedDescription(contactName, age, birthYear, showYear, isR
  */
 function buildBirthdayIndex(events) {
   const map = new Map();
+  const duplicateKeys = new Set();
   for (const ev of events) {
     if (!ev.isAllDayEvent()) continue;
     const contactId = tryGetTag(ev, 'contactId');
     if (!contactId) continue;
     const d   = ev.getStartTime();
     const key = `${contactId}|${d.getMonth()}|${d.getDate()}|${d.getFullYear()}`;
+    if (duplicateKeys.has(key)) continue;
+    if (map.has(key)) {
+      map.delete(key);
+      duplicateKeys.add(key);
+      continue;
+    }
     map.set(key, ev);
   }
   return map;
+}
+
+/**
+ * Delete events excluded from the index in this script-owned calendar.
+ * Excluding an occurrence excludes its whole series, including indexed dates.
+ * Mutates the supplied event Set and index in place.
+ */
+function removeUnindexedEvents(events, eventIndex) {
+  const retainedEvents = new Set(eventIndex.values());
+  const seriesById = new Map();
+  const seriesIdsToDelete = new Set();
+
+  for (const event of events) {
+    if (event.isRecurringEvent()) {
+      const series = event.getEventSeries();
+      const seriesId = series.getId();
+      if (!seriesById.has(seriesId)) seriesById.set(seriesId, { series, events: [] });
+      seriesById.get(seriesId).events.push(event);
+      if (!retainedEvents.has(event)) seriesIdsToDelete.add(seriesId);
+    }
+  }
+
+  for (const seriesId of seriesIdsToDelete) {
+    const { series, events: seriesEvents } = seriesById.get(seriesId);
+    series.deleteEventSeries();
+    for (const event of seriesEvents) events.delete(event);
+  }
+
+  for (const event of events) {
+    if (retainedEvents.has(event)) continue;
+
+    event.deleteEvent();
+    events.delete(event);
+  }
+
+  for (const [key, event] of eventIndex) {
+    if (!events.has(event)) eventIndex.delete(key);
+  }
 }
 
 /**
@@ -758,7 +819,7 @@ function getContactName(person) {
  * Check if birthday event already exists.
  */
 function findBirthdayEvents(allEvents, contactId, month, day) {
-  return allEvents.filter(ev => {
+  return [...allEvents].filter(ev => {
     const eventContactId = tryGetTag(ev, 'contactId');
     const d     = ev.getStartTime();
     return ev.isAllDayEvent() &&
