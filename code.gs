@@ -379,7 +379,7 @@ function buildBirthdayIndex(events) {
   const map = new Map();
   for (const ev of events) {
     if (!ev.isAllDayEvent()) continue;
-    const contactId = ev.getTag('contactId');
+    const contactId = tryGetTag(ev, 'contactId');
     if (!contactId) continue;
     const d   = ev.getStartTime();
     const key = `${contactId}|${d.getMonth()}|${d.getDate()}|${d.getFullYear()}`;
@@ -660,6 +660,7 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
         { description: yearDescription }
       );
       event.setTag('contactId', contactId);
+      event.setTag('scriptKey', CONFIG.scriptKey);
       if (CONFIG.useReminders) {
         event.addPopupReminder(CONFIG.reminderMinutesBefore);
       }
@@ -686,6 +687,7 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
       { description: expectedDescription }
     );
     eventSeries.setTag('contactId', contactId);
+    eventSeries.setTag('scriptKey', CONFIG.scriptKey);
     if (CONFIG.useReminders) {
       eventSeries.addPopupReminder(CONFIG.reminderMinutesBefore);
     }
@@ -704,10 +706,17 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents, e
  * Check if an event was created by this script by looking for its script key tag.
  */
 function isEventCreatedByScript(event) {
+  return tryGetTag(event, 'scriptKey') === CONFIG.scriptKey;
+}
+
+/**
+ * Safely get an event tag, returning null when it is missing or unavailable.
+ */
+function tryGetTag(event, tagName) {
   try {
-    return !!event.getTag('contactId');
+    return event.getTag(tagName) || null;
   } catch (e) {
-    return false;
+    return null;
   }
 }
 
@@ -749,7 +758,7 @@ function getContactName(person) {
  */
 function findBirthdayEvents(allEvents, contactId, month, day) {
   return allEvents.filter(ev => {
-    const eventContactId = ev.getTag('contactId');
+    const eventContactId = tryGetTag(ev, 'contactId');
     const d     = ev.getStartTime();
     return ev.isAllDayEvent() &&
            (eventContactId === contactId && (d.getMonth() === month && d.getDate() === day));
@@ -804,13 +813,12 @@ function cleanupOldBirthdayEvents(calendar, allContacts) {
       return true;
     })
     .map(person => {
-      if (!person.names || !person.birthdays) return null;
-      const name = getContactName(person);
+      if (!person.birthdays) return null;
       const bday = person.birthdays.find(b => b.date);
       if (!bday) return null;
 
       return {
-        name,
+        contactId: person.resourceName,
         day: bday.date.day,
         month: bday.date.month - 1,
       };
@@ -827,14 +835,18 @@ function cleanupOldBirthdayEvents(calendar, allContacts) {
     const title = event.getTitle();
     const start = event.getStartTime();
     const isAllDay = event.isAllDayEvent();
+    const isFromScript = isEventCreatedByScript(event);
+    const eventContactId = tryGetTag(event, 'contactId');
 
     for (const contact of contactBirthdays) {
-      const isNameMatch = title.includes(contact.name);
+      const isContactMatch = eventContactId === contact.contactId;
       const isBirthdayDateMatch =
         start.getDate() === contact.day &&
         start.getMonth() === contact.month;
 
-      const shouldDelete = isAllDay && isNameMatch && isBirthdayDateMatch;
+      const shouldDelete =
+        isFromScript && // Only delete events created by this script
+        (isAllDay && isContactMatch && isBirthdayDateMatch);
 
       if (!shouldDelete) continue;
 
