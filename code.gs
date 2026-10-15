@@ -420,6 +420,9 @@ function removeUnindexedEvents(events, eventIndex) {
   const retainedEvents = new Set(eventIndex.values());
   const seriesById = new Map();
   const seriesIdsToDelete = new Set();
+  let deletedEventCount = 0;
+
+  Logger.log(`🔎 Checking ${events.size} fetched events for unindexed cleanup (including duplicates).`);
 
   for (const event of events) {
     if (event.isRecurringEvent()) {
@@ -433,20 +436,30 @@ function removeUnindexedEvents(events, eventIndex) {
 
   for (const seriesId of seriesIdsToDelete) {
     const { series, events: seriesEvents } = seriesById.get(seriesId);
+    const title = seriesEvents[0].getTitle();
     series.deleteEventSeries();
     for (const event of seriesEvents) events.delete(event);
+
+    Logger.log(`🗑️ Deleted unindexed series: ${title} (${seriesEvents.length} fetched occurrences).`);
   }
 
   for (const event of events) {
     if (retainedEvents.has(event)) continue;
 
+    const title = event.getTitle();
+    const date = event.getStartTime().toDateString();
     event.deleteEvent();
     events.delete(event);
+    deletedEventCount++;
+
+    Logger.log(`🗑️ Deleted unindexed event: ${title} [${date}]`);
   }
 
   for (const [key, event] of eventIndex) {
     if (!events.has(event)) eventIndex.delete(key);
   }
+
+  Logger.log(`✅ Unindexed cleanup complete: ${deletedEventCount} individual events and ${seriesIdsToDelete.size} series deleted; ${events.size} fetched events retained.`);
 }
 
 /**
