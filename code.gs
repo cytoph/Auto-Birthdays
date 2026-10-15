@@ -88,6 +88,7 @@ function getAllContacts() {
  */
 function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents) {
   const contactName = getContactName(person);
+  const contactId = person.resourceName; // e.g. "people/c1234567890"
 
   // Extract actual date from birthday object
   const birthdayDate = birthdayRaw.date;
@@ -102,26 +103,13 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents) {
   const month = parseInt(birthdayDate.month, 10) - 1;
   const day = parseInt(birthdayDate.day, 10);
 
-  const birthdayStartDate = new Date(startYear, month, day);
-  const birthdayDateThisYear = new Date(currentYear, month, day);
-
-  if (isNaN(birthdayStartDate.getTime()) || isNaN(birthdayDateThisYear.getTime())) {
-    Logger.log(`⚠️ Invalid date for ${contactName}: ${birthdayDate.month}-${birthdayDate.day}`);
-    return;
-  }
-  
   // Build expected title
-  let expectedTitle = '';
-  const age = birthdayDate.year ? currentYear - birthdayDate.year : null;
-  if (CONFIG.useEmoji) expectedTitle += '🎂 ';
-  expectedTitle += contactName;
-  if (birthdayDate.year && CONFIG.showYearOrAge) {
-    expectedTitle += CONFIG.useRecurrence ? ` (*${birthdayDate.year})` : ` (${age})`;
-  }
+  let expectedTitle = contactName + ` hat Geburtstag`;
 
   // Find and update related events
-  const relatedEvents = findBirthdayEvents(allEvents, contactName, birthdayDate);
+  const relatedEvents = findBirthdayEvents(allEvents, birthdayDate, contactId);
   const deletedSeriesIds = new Set();
+  const deletedEventIds = new Set();
   let correctEventExists = false;
 
   for (const event of relatedEvents) {
@@ -133,7 +121,6 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents) {
     if (isTitleOutdated || isNotAllDay || isRecurrenceMismatch) {
       try {
         if (event.isRecurringEvent && event.isRecurringEvent()) {
-          
           const series = event.getEventSeries();
           const seriesId = series.getId();
           if (deletedSeriesIds.has(seriesId)) {
@@ -143,13 +130,15 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents) {
           series.deleteEventSeries();
           Logger.log(`🗑️ Deleted outdated recurring series: ${title}`);
         } else {
+          const eventId = event.getId();
+          deletedEventIds.add(eventId);
           event.deleteEvent();
           Logger.log(`🗑️ Deleted outdated event: ${title}`);
         }
       } catch (e) {
         Logger.log(`❌ Error deleting event: ${title} → ${e}`);
       }
-    } else {
+    } else if (CONFIG.useRecurrence) {
       correctEventExists = true;
     }
   }
@@ -164,22 +153,65 @@ function updateOrCreateBirthDayEvent(person, birthdayRaw, calendar, allEvents) {
       .addYearlyRule()
       .until(new Date(currentYear + CONFIG.futureYears, 11, 31));
 
+    const birthdayStartDate = new Date(startYear, month, day);
+
+    let description = `${contactName} hat Geburtstag!`;
+
+    if (birthdayDate.year) {
+      description += ` (Jahrgang: ${birthdayDate.year})`;
+    }
+
     const eventSeries = calendar.createAllDayEventSeries(
       expectedTitle,
       birthdayStartDate,
       recurrence,
-      { description: `🎂 Happy Birthday ${contactName}` }
+      { description: description }
     );
-    eventSeries.addPopupReminder(CONFIG.reminderMinutesBefore);
+    eventSeries.setTag('contactId', contactId);
+    if (CONFIG.reminderMinutesBefore > 0) {
+      eventSeries.addPopupReminder(CONFIG.reminderMinutesBefore);
+    }
     Logger.log(`🎉 Created RECURRING event: ${expectedTitle} [starts ${birthdayStartDate.toDateString()}]`);
   } else {
-    const event = calendar.createAllDayEvent(
-      expectedTitle,
-      birthdayDateThisYear,
-      { description: `🎂 Happy Birthday ${contactName}` }
-    );
-    event.addPopupReminder(CONFIG.reminderMinutesBefore);
-    Logger.log(`🎁 Created ONE-TIME event: ${expectedTitle} [${birthdayDateThisYear.toDateString()}]`);
+    for (i = 0; i < CONFIG.pastYears + CONFIG.futureYears + 1; i++) {
+      const thisYear = startYear + i;
+
+      if (birthdayDate.year && (thisYear - birthdayDate.year) < 1) {
+        continue; // don't add birthdays for years that person wasn't even born
+      }
+
+      const thisBirthdayDate = new Date(thisYear, month, day);
+      const age = birthdayDate.year ? thisYear - birthdayDate.year : null;
+      const description = contactName + ` ` + (age ? `wird ${age} Jahre alt!` : `hat Geburtstag!`);
+
+      const existingEvent = relatedEvents.find(e => e.getStartTime().getFullYear() == thisYear);
+      const existingEventId = existingEvent ? existingEvent.getId() : null;
+
+      if (existingEvent && existingEventId && !deletedEventIds.has(existingEventId)) {
+        const isDescriptionOutdated = existingEvent.getDescription() !== description;
+
+        if (!isDescriptionOutdated) {
+          continue; // now we're sure everything matches
+        }
+
+        deletedEventIds.add(existingEventId);
+        existingEvent.deleteEvent();
+        Logger.log(`🗑️ Deleted outdated event: ${existingEvent.getTitle()}`);
+      }
+
+      const event = calendar.createAllDayEvent(
+        expectedTitle,
+        thisBirthdayDate,
+        { description: description }
+      );
+      event.setTag('contactId', contactId);
+
+      if (CONFIG.reminderMinutesBefore > 0) {
+        event.addPopupReminder(CONFIG.reminderMinutesBefore);
+      }
+
+      Logger.log(`🎁 Created ONE-TIME event: ${expectedTitle} [${thisBirthdayDate.toDateString()}]`);
+    }
   }
 }
 
@@ -195,23 +227,20 @@ function getContactName(person) {
 }
 
 /**
- * Check if birthday event already exists.
+ * Find existing birthday events for a contact by contactId tag and date.
  */
-function findBirthdayEvents(allEvents, contactName, birthdayDate) {
+function findBirthdayEvents(allEvents, birthdayDate, contactId) {
   return allEvents.filter(event => {
-    const title = event.getTitle();
-    const start = event.getStartTime();
+    if (!event.isAllDayEvent()) return false;
 
-    const isNameMatch = title.includes(contactName);
+    const start = event.getStartTime();
     const isBirthdayDateMatch =
       start.getDate() === birthdayDate.day &&
       start.getMonth() === birthdayDate.month - 1;
 
-    return (
-      isNameMatch &&
-      event.isAllDayEvent() &&
-      (title.trim().startsWith('🎂') || isBirthdayDateMatch)
-    );
+    if (!isBirthdayDateMatch) return false;
+
+    return event.getTag('contactId') === contactId;
   });
 }
 
@@ -241,7 +270,7 @@ function cleanupOldBirthdayEvents(calendar, allContacts) {
   const startDate = new Date(startYear, 0, 1);
   const endDate = new Date(endYear, 11, 31);
   const allEvents = calendar.getEvents(startDate, endDate);
-  
+
   Logger.log(`🧹 Cleanup started between: ${startDate.toDateString()} - ${endDate.toDateString()}`);
 
   // Collect valid contacts with birthday info
@@ -267,7 +296,6 @@ function cleanupOldBirthdayEvents(calendar, allContacts) {
     const title = event.getTitle();
     const start = event.getStartTime();
     const isAllDay = event.isAllDayEvent();
-    const startsWithCakeEmoji = title.trim().startsWith('🎂');
 
     for (const contact of contactBirthdays) {
       const isNameMatch = title.includes(contact.name);
@@ -275,9 +303,7 @@ function cleanupOldBirthdayEvents(calendar, allContacts) {
         start.getDate() === contact.day &&
         start.getMonth() === contact.month;
 
-      const shouldDelete =
-        (startsWithCakeEmoji && isNameMatch) ||
-        (isAllDay && isNameMatch && isBirthdayDateMatch);
+      const shouldDelete = isAllDay && isNameMatch && isBirthdayDateMatch;
 
       if (!shouldDelete) continue;
 
