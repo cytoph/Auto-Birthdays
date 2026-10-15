@@ -55,6 +55,11 @@ const LANGUAGE_CONFIG = {
     titleFormats: {
       'default': '{emoji}{name} - {age} {years}'
     },
+    descriptionFormats: {
+      'default': '{name} turns {age} {years} old!',
+      'unknownYear': "{name}'s birthday!",
+      'recurring': "{name}'s birthday! (Born: {birthYear})"
+    },
     terms: {
       'age': 'age',
       'years': 'years',
@@ -66,6 +71,11 @@ const LANGUAGE_CONFIG = {
   it: {
     titleFormats: {
       'default': '{emoji}Compleanno di {name} - {age} {years}'
+    },
+    descriptionFormats: {
+      'default': '{name} compie {age} {years}!',
+      'unknownYear': '{name} compie gli anni!',
+      'recurring': '{name} compie gli anni! (Anno di nascita: {birthYear})'
     },
     terms: {
       'age': 'età',
@@ -79,6 +89,11 @@ const LANGUAGE_CONFIG = {
     titleFormats: {
       'default': '{emoji}Anniversaire de {name} - {age} {years}'
     },
+    descriptionFormats: {
+      'default': '{name} a {age} {years} !',
+      'unknownYear': '{name} fête son anniversaire !',
+      'recurring': '{name} fête son anniversaire ! (Année de naissance : {birthYear})'
+    },
     terms: {
       'age': 'âge',
       'years': 'ans',
@@ -91,6 +106,11 @@ const LANGUAGE_CONFIG = {
     titleFormats: {
       'default': '{emoji}Geburtstag von {name} - {age} {years}'
     },
+    descriptionFormats: {
+      'default': '{name} wird {age} {years} alt!',
+      'unknownYear': '{name} hat Geburtstag!',
+      'recurring': '{name} hat Geburtstag! (Jahrgang: {birthYear})'
+    },
     terms: {
       'age': 'Alter',
       'years': 'Jahre',
@@ -102,6 +122,11 @@ const LANGUAGE_CONFIG = {
   es: {
     titleFormats: {
       'default': '{emoji}Cumpleaños de {name} - {age} {years}'
+    },
+    descriptionFormats: {
+      'default': '¡{name} cumple {age} {years}!',
+      'unknownYear': '¡Es el cumpleaños de {name}!',
+      'recurring': '¡Es el cumpleaños de {name}! (Año de nacimiento: {birthYear})'
     },
     terms: {
       'age': 'edad',
@@ -254,19 +279,96 @@ function loopThroughContacts() {
  */
 
 /**
- * Generate the original customized birthday title.
+ * Format localized text for a birthday event
+ * @param {string} formatTemplate - The format template
+ * @param {string} contactName - The name of the person
+ * @param {number|null} age - The age of the person (null if unknown)
+ * @param {number|null} birthYear - The birth year (null if unknown)
+ * @param {boolean} showYear - Whether to show birth year instead of age
+ * @param {boolean} isRecurring - Whether this is a recurring event
+ * @param {boolean} usingCustomFormat - Whether a custom title format is being used
+ * @returns {string} The formatted text
  */
-function generateLocalizedTitle(contactName, age, birthYear, showYear, isRecurring) {
-  return contactName + ` hat Geburtstag`;
+function formatLocalizedText(formatTemplate, contactName, age, birthYear, showYear, isRecurring, usingCustomFormat = false) {
+  const langConfig = LANGUAGE_CONFIG[CONFIG.language] || LANGUAGE_CONFIG['en'];
+  
+  // Build replacement values
+  // useEmoji only applies to default formats; custom formats control emoji via {emoji} placeholder
+  const emoji = (usingCustomFormat || CONFIG.useEmoji) ? '🎂 ' : '';
+  let ageOrYear = '';
+  let ageText = '';
+  
+  // Always populate age-related variables if we have the data (regardless of showYearOrAge setting)
+  // The showYearOrAge setting only affects default formats, not custom formats
+  if (birthYear) {
+    if (showYear) {
+      ageOrYear = `${birthYear}`;
+      ageText = `${birthYear}`;
+    } else if (age !== null) {
+      const yearWord = age === 1 ? langConfig.terms.year : langConfig.terms.years;
+      ageOrYear = age.toString();
+      ageText = `${age} ${yearWord}`;
+    }
+  }
+  
+  // Replace placeholders in the format template
+  let text = formatTemplate
+    .replace(/{emoji}/g, emoji)
+    .replace(/{name}/g, contactName)
+    .replace(/{ageOrYear}/g, ageOrYear)
+    .replace(/{age}/g, age !== null ? age.toString() : '')
+    .replace(/{ageText}/g, ageText)
+    .replace(/{birthYear}/g, birthYear ? birthYear.toString() : '')
+    .replace(/{years}/g, age === 1 ? langConfig.terms.year : (age !== null ? langConfig.terms.years : ''))  // Automatically singular/plural
+    .replace(/{year}/g, age === 1 ? langConfig.terms.year : '')  // Singular form only for age 1 (for backwards compatibility)
+    .replace(/{birthday}/g, langConfig.terms.birthday);
+  
+  // Clean up empty age/year information - remove parentheses, dashes, etc. around empty values
+  text = text
+    .replace(/\s*\(\s*\)\s*/g, '')        // Remove empty parentheses like " () "
+    .replace(/\s*\(\s*\*\s*\)\s*/g, '')   // Remove empty year parentheses like " (*) "
+    .replace(/\s*-\s*\*?\s*$/g, '')       // Remove trailing " - " or " - *"
+    .replace(/\s*-\s*$/g, '')             // Remove trailing " - "
+    .replace(/\s+/g, ' ');                // Clean up multiple spaces
+    
+  return text.trim();
 }
 
 /**
- * Generate the original customized age or birth-year description.
+ * Generate a localized title for a birthday event
+ * @param {string} contactName - The name of the person
+ * @param {number|null} age - The age of the person (null if unknown)
+ * @param {number|null} birthYear - The birth year (null if unknown)  
+ * @param {boolean} showYear - Whether to show birth year instead of age
+ * @param {boolean} isRecurring - Whether this is a recurring event
+ * @returns {string} The formatted title
+ */
+function generateLocalizedTitle(contactName, age, birthYear, showYear, isRecurring) {
+  const langConfig = LANGUAGE_CONFIG[CONFIG.language] || LANGUAGE_CONFIG['en'];
+  
+  // Use titleFormat if provided, otherwise fall back to language default
+  const formatTemplate = CONFIG.titleFormat || langConfig.titleFormats['default'];
+  const usingCustomFormat = CONFIG.titleFormat && CONFIG.titleFormat.trim() !== '';
+
+  return formatLocalizedText(formatTemplate, contactName, age, birthYear, showYear, isRecurring, usingCustomFormat);
+}
+
+/**
+ * Generate a localized description for a birthday event
+ * @param {string} contactName - The name of the person
+ * @param {number|null} age - The age of the person (null if unknown)
+ * @param {number|null} birthYear - The birth year (null if unknown)
+ * @param {boolean} showYear - Whether to show birth year instead of age
+ * @param {boolean} isRecurring - Whether this is a recurring event
+ * @returns {string} The formatted description
  */
 function generateLocalizedDescription(contactName, age, birthYear, showYear, isRecurring) {
-  if (!birthYear) return `${contactName} hat Geburtstag!`;
-  if (isRecurring) return `${contactName} hat Geburtstag! (Jahrgang: ${birthYear})`;
-  return `${contactName} wird ${age} Jahre alt!`;
+  const langConfig = LANGUAGE_CONFIG[CONFIG.language] || LANGUAGE_CONFIG['en'];
+
+  const formatKey = !birthYear ? 'unknownYear' : (isRecurring ? 'recurring' : 'default');
+  const formatTemplate = langConfig.descriptionFormats[formatKey];
+
+  return formatLocalizedText(formatTemplate, contactName, age, birthYear, showYear, isRecurring);
 }
 
 /**
