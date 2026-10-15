@@ -146,7 +146,7 @@ const LANGUAGE_CONFIG = {
 function loopThroughContacts() {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) {
-    Logger.log('Another Auto-Birthdays run is already active; skipping this run.');
+    Logger.log('⚠️ Another Auto-Birthdays run is already active; skipping this run.');
     return;
   }
 
@@ -408,6 +408,9 @@ function buildBirthdayIndex(events) {
     }
     map.set(key, ev);
   }
+
+  Logger.log(`🔎 Birthday index built: ${map.size} unique contact/date entries retained; ${duplicateKeys.size} duplicate contact/date keys excluded for cleanup.`);
+
   return map;
 }
 
